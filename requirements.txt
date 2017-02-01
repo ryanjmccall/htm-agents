@@ -1,1 +1,3 @@
 gym
+nupic==0.5.7
+nupic.bindings==0.4.13

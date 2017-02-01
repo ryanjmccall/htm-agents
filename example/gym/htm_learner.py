@@ -56,6 +56,7 @@ SP_PARAMS = {
 }
 
 TM_PARAMS = {
+  "basalInputWidth": 2048,
   "columnCount": 2048,
   "cellsPerColumn": 8,
   # "formInternalConnections": 1,
@@ -140,9 +141,23 @@ class HTMLearner(object):
 
 
   def getState(self):
-    return self.temporalMemoryRegion.activeState * \
-           self.temporalMemoryRegion.previouslyPredictedCells
+    outputSize = TM_PARAMS["columnCount"] * TM_PARAMS["cellsPerColumn"]
+    activeCells = numpy.zeros(shape=(outputSize,))
+    activeCellIndices = numpy.array(
+      self.temporalMemoryRegion._tm.getActiveCells())
+    if len(activeCellIndices):
+      activeCells[activeCellIndices] = 1
 
+    predictiveCells = numpy.zeros(shape=(outputSize,))
+    predCellIndices = numpy.array(
+      self.temporalMemoryRegion._tm.getPredictiveCells())
+    if len(predCellIndices):
+      predictiveCells[predCellIndices] = 1
+
+    return activeCells * predictiveCells
+    # previous code
+    # return self.temporalMemoryRegion.activeState * \
+    #        self.temporalMemoryRegion.previouslyPredictedCells
 
   def _qValue(self, state, action):
     qValue = 0
