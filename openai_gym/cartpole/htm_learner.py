@@ -78,97 +78,26 @@ TM_PARAMS = {
 
 
 
-class HTMLearner(object):
+class HtmLearner(object):
   """Only supports Discrete action spaces and Box observation spaces."""
 
-  def __init__(self, environment, alpha=0.3,
-               epsilon=0.75, eps_decay=0.99, discount=0.95):
-    self.n = 2048 * 8
-    self.iterations = 0
+  def __init__(self, environment, alpha=0.3, epsilon=0.75, epsilonDecay=0.99,
+               discount=0.95, k=0.01):
     self.environment = environment
     self.actions = range(environment.action_space.n)
-    self.discount = discount
-    self.weights = defaultdict(lambda: numpy.zeros(self.n))
-    self.epsilon = epsilon
-    self.eps_decay = eps_decay
-    self.network = self._createNetwork()
+
     self.alpha = alpha
-    self.seq = 0
+    self.epsilon = epsilon
+    self.epsilonDecay = epsilonDecay
+    self.discount = discount
+    self.k = k
 
+    self.n = TM_PARAMS["columnCount"] * TM_PARAMS["cellsPerColumn"]
+    self.weights = defaultdict(lambda: numpy.zeros(self.n))
 
-  def bestAction(self, state):
-    bestActions = []
-    maxQValue = float("-inf")
-
-    if random.random() < self.epsilon:
-      return random.choice(self.actions)
-
-    for action in self.actions:
-      qValue = self._qValue(state, action)
-
-      if qValue > maxQValue:
-        bestActions = [action]
-        maxQValue = qValue
-      elif qValue == maxQValue:
-        bestActions.append(action)
-
-    return random.choice(bestActions) if len(bestActions) else None
-
-
-  def update(self, state, action, nextState, reward):
-    self.iterations += 1
-    targetValue = reward + (self.discount * self._value(nextState))
-    qValue = self._qValue(state, action)
-    if sum(state) > 0:
-      correction = (targetValue - qValue) / sum(state)
-    else:
-      correction = 0.
-
-    for i in state.nonzero()[0]:
-      self.weights[action][i] += self.alpha * correction
-
-
-  def compute(self, observation, action):
-    obs = dict([(str(i), observation[i]) for i in xrange(len(observation))])
-    encodedObservation = self.observationEncoder.encode(obs)
-    encodedAction = self.actionEncoder[action]
-    self.observationSensor.addDataToQueue(
-      list(encodedObservation.nonzero()[0]), 0, self.seq
-    )
-    self.actionSensor.addDataToQueue(list(encodedAction), 0, self.seq)
-    self.network.run(1)
-    return self.getState()
-
-
-  def getState(self):
-    outputSize = TM_PARAMS["columnCount"] * TM_PARAMS["cellsPerColumn"]
-    activeCells = numpy.zeros(shape=(outputSize,))
-    activeCellIndices = numpy.array(
-      self.temporalMemoryRegion._tm.getActiveCells())
-    if len(activeCellIndices):
-      activeCells[activeCellIndices] = 1
-
-    predictiveCells = numpy.zeros(shape=(outputSize,))
-    predCellIndices = numpy.array(
-      self.temporalMemoryRegion._tm.getPredictiveCells())
-    if len(predCellIndices):
-      predictiveCells[predCellIndices] = 1
-
-    return activeCells * predictiveCells
-    # previous code
-    # return self.temporalMemoryRegion.activeState * \
-    #        self.temporalMemoryRegion.previouslyPredictedCells
-
-  def _qValue(self, state, action):
-    qValue = 0
-    for i in state.nonzero()[0]:
-      qValue += self.weights[action][i]
-    return qValue
-
-
-  def _value(self, state):
-    qValues = [self._qValue(state, action) for action in self.actions]
-    return max(qValues) if len(qValues) else 0.0
+    self.iterations = 0
+    self.sequenceId = 0
+    self.network = self._createNetwork()
 
 
   def _createNetwork(self):
@@ -220,7 +149,7 @@ class HTMLearner(object):
     return network
 
 
-  def _createObservationEncoder(self):
+  def _createObservationEncoder(self, n=512, w=41):
     """
     Only works with Box observation spaces.
 
@@ -231,30 +160,112 @@ class HTMLearner(object):
       high = self.environment.observation_space.high[i]
       low = self.environment.observation_space.low[i]
       # hacky
-      if i == 1 or 3:
+      if i == 1 or i == 3:
+        # high and low are essentially +inf; so threshold
         high = 2.2
         low = -2.2
-      if i == 2:
-        high /= 2.
+      elif i == 2:
+        high /= 2.  # Why?
         low /= 2.
 
-      encoder = ScalarEncoder(41, low, high, n=512, name=str(i),
-                              clipInput=True)
+      encoder = ScalarEncoder(w, low, high, n=n, name=str(i), clipInput=True)
       multiEncoder.addEncoder(str(i), encoder)
 
     return multiEncoder
 
+
+  def bestAction(self, state):
+    bestActions = []
+    maxQValue = float("-inf")
+
+    if random.random() < self.epsilon:
+      return random.choice(self.actions)
+
+    for action in self.actions:
+      qValue = self._qValue(state, action)
+
+      if qValue > maxQValue:
+        bestActions = [action]
+        maxQValue = qValue
+      elif qValue == maxQValue:
+        bestActions.append(action)
+
+    return random.choice(bestActions) if len(bestActions) else None
+
+
+  def update(self, state, action, nextState, reward):
+    self.iterations += 1
+    targetValue = reward + (self.discount * self._value(nextState))
+    qValue = self._qValue(state, action)
+    if sum(state) > 0:
+      correction = (targetValue - qValue) / sum(state)
+    else:
+      correction = 0.
+
+    for i in state.nonzero()[0]:
+      self.weights[action][i] += self.alpha * correction
+
+
+  def compute(self, observation, action):
+    obs = dict([(str(i), observation[i]) for i in xrange(len(observation))])
+    encodedObservation = self.observationEncoder.encode(obs)
+    encodedAction = self.actionEncoder[action]
+    self.observationSensor.addDataToQueue(
+      list(encodedObservation.nonzero()[0]), 0, self.sequenceId
+    )
+    self.actionSensor.addDataToQueue(list(encodedAction), 0, self.sequenceId)
+    self.network.run(1)
+    return self.getState()
+
+
+  def getState(self):
+    outputSize = TM_PARAMS["columnCount"] * TM_PARAMS["cellsPerColumn"]
+    activeCells = numpy.zeros(shape=(outputSize,))
+    activeCellIndices = numpy.array(
+      self.temporalMemoryRegion._tm.getActiveCells())
+    if len(activeCellIndices):
+      activeCells[activeCellIndices] = 1
+
+    predictiveCells = numpy.zeros(shape=(outputSize,))
+    predCellIndices = numpy.array(
+      self.temporalMemoryRegion._tm.getPredictiveCells())
+    if len(predCellIndices):
+      predictiveCells[predCellIndices] = 1
+
+    return activeCells * predictiveCells
+    # previous code
+    # return self.temporalMemoryRegion.activeState * \
+    #        self.temporalMemoryRegion.previouslyPredictedCells
+
+  def _qValue(self, state, action):
+    qValue = 0
+    for i in state.nonzero()[0]:
+      qValue += self.weights[action][i]
+    return qValue
+
+
+  def _value(self, state):
+    qValues = [self._qValue(state, action) for action in self.actions]
+    return max(qValues) if len(qValues) else 0.0
 
   def _generatePattern(self):
     cellsIndices = range(2048)
     random.shuffle(cellsIndices)
     return set(cellsIndices[:40])
 
+  def updateWhenDone(self, cumulative_reward, ave_cumulative_reward):
+    if ave_cumulative_reward is None:
+      ave_cumulative_reward = cumulative_reward
+    else:
+      ave_cumulative_reward = (self.k * cumulative_reward +
+                               (1 - self.k) * ave_cumulative_reward)
+    if cumulative_reward > ave_cumulative_reward:
+      self.epsilon *= self.epsilonDecay
 
-  def _reset(self):
+  def reset(self):
     self.iterations = 0
-    self.observationSensor.addResetToQueue(self.seq)
-    self.actionSensor.addResetToQueue(self.seq)
+    self.observationSensor.addResetToQueue(self.sequenceId)
+    self.actionSensor.addResetToQueue(self.sequenceId)
     self.network.run(1)
     self.temporalMemoryRegion.reset()
-    self.seq += 1
+    self.sequenceId += 1
