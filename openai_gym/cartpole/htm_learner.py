@@ -92,7 +92,9 @@ class HtmLearner(object):
     self.discount = discount
     self.k = k
 
-    self.n = TM_PARAMS["columnCount"] * TM_PARAMS["cellsPerColumn"]
+    self.columnCount = TM_PARAMS["columnCount"]
+    self.cellsPerColumn = TM_PARAMS["cellsPerColumn"]
+    self.n = self.columnCount * self.cellsPerColumn
     self.weights = defaultdict(lambda: numpy.zeros(self.n))
 
     self.iterations = 0
@@ -154,6 +156,10 @@ class HtmLearner(object):
     Only works with Box observation spaces.
 
     Hacky modifications for Cartpole.
+    0) Cart Position (-4.8, 4.8) TODO when does it fail?
+    1) Cart Velocity (-inf, inf) -> (-2.2, 2.2)  TODO use actual range
+    2) Pole Angle (-0.418, 0.418) -> (-0.209, 0.209) TODO +-15 is stopping point
+    3) Pole Velocity at Tip (-inf, inf) -> (-2.2, 2.2) TODO use actual range
     """
     multiEncoder = MultiEncoder()
     for i in xrange(self.environment.observation_space.shape[0]):
@@ -161,7 +167,7 @@ class HtmLearner(object):
       low = self.environment.observation_space.low[i]
       # hacky
       if i == 1 or i == 3:
-        # high and low are essentially +inf; so threshold
+        # high and low are essentially inf; so threshold
         high = 2.2
         low = -2.2
       elif i == 2:
@@ -178,7 +184,7 @@ class HtmLearner(object):
     bestActions = []
     maxQValue = float("-inf")
 
-    if random.random() < self.epsilon:
+    if random.random() < self.epsilon:  # TODO research why this initial randomness, due to need to learn weights?
       return random.choice(self.actions)
 
     for action in self.actions:
@@ -219,7 +225,7 @@ class HtmLearner(object):
 
 
   def getState(self):
-    outputSize = TM_PARAMS["columnCount"] * TM_PARAMS["cellsPerColumn"]
+    outputSize = self.n
     activeCells = numpy.zeros(shape=(outputSize,))
     activeCellIndices = numpy.array(
       self.temporalMemoryRegion._tm.getActiveCells())
@@ -244,7 +250,7 @@ class HtmLearner(object):
     return qValue
 
 
-  def _value(self, state):
+  def _value(self, state):  # returns max q-value of all actions from state
     qValues = [self._qValue(state, action) for action in self.actions]
     return max(qValues) if len(qValues) else 0.0
 
@@ -260,6 +266,7 @@ class HtmLearner(object):
       ave_cumulative_reward = (self.k * cumulative_reward +
                                (1 - self.k) * ave_cumulative_reward)
     if cumulative_reward > ave_cumulative_reward:
+      # Only decay epsilon when reward improves, epsilon controls chance of random action
       self.epsilon *= self.epsilonDecay
 
   def reset(self):
